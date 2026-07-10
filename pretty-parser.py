@@ -1,63 +1,85 @@
 import json
 import streamlit as st
 import pandas as pd
+from collections import defaultdict
 
 st.set_page_config(
-    page_title="JSON Cell Parser",
+    page_title="JSON Structure Parser",
     page_icon="🧾",
     layout="wide"
 )
 
-st.title("🧾 JSON Cell Parser")
-st.write("Paste JSON from a data table cell below.")
+st.title("🧾 JSON Structure Parser")
+st.write("Paste one JSON object, a JSON array, or multiple JSON objects from data table cells.")
 
 
-def count_nested_items(value):
+def parse_multiple_json_packages(raw_text):
     """
-    Counts nested JSON containers:
-    - dict objects
-    - list arrays
+    Supports:
+    1. One JSON object
+    2. A JSON array of objects
+    3. Newline-delimited JSON objects
     """
+    raw_text = raw_text.strip()
+
+    if not raw_text:
+        return []
+
+    # First, try parsing the entire input as valid JSON.
+    try:
+        parsed = json.loads(raw_text)
+
+        if isinstance(parsed, list):
+            return parsed
+
+        return [parsed]
+
+    except json.JSONDecodeError:
+        pass
+
+    # If that fails, try parsing line-by-line.
+    packages = []
+    errors = []
+
+    for line_number, line in enumerate(raw_text.splitlines(), start=1):
+        line = line.strip()
+
+        if not line:
+            continue
+
+        try:
+            packages.append(json.loads(line))
+        except json.JSONDecodeError as e:
+            errors.append(
+                f"Line {line_number}: {e.msg} at column {e.colno}"
+            )
+
+    if errors:
+        raise ValueError("\n".join(errors))
+
+    return packages
+
+
+def type_name(value):
     if isinstance(value, dict):
-        return 1 + sum(count_nested_items(v) for v in value.values())
-
+        return "object"
     if isinstance(value, list):
-        return 1 + sum(count_nested_items(item) for item in value)
+        return "array"
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
 
-    return 0
-
-
-def build_element_summary(data):
-    rows = []
-
-    if isinstance(data, dict):
-        for key, value in data.items():
-            rows.append({
-                "element": key,
-                "type": type(value).__name__,
-                "nested_objects_or_arrays": count_nested_items(value),
-            })
-
-    elif isinstance(data, list):
-        for index, value in enumerate(data):
-            rows.append({
-                "element": f"[{index}]",
-                "type": type(value).__name__,
-                "nested_objects_or_arrays": count_nested_items(value),
-            })
-
-    else:
-        rows.append({
-            "element": "root",
-            "type": type(data).__name__,
-            "nested_objects_or_arrays": count_nested_items(data),
-        })
-
-    return pd.DataFrame(rows)
+    return type(value).__name__
 
 
 def value_preview(value, max_length=120):
-    """Make values readable in the search result table."""
     if isinstance(value, (dict, list)):
         text = json.dumps(value, ensure_ascii=False)
     else:
@@ -69,126 +91,207 @@ def value_preview(value, max_length=120):
     return text
 
 
-def find_json_matches(data, search_term, path="$"):
+def walk_json_structure(value, path="$", rows=None):
     """
-    Recursively search JSON for matching keys, paths, or values.
+    Walk every path in a JSON package.
+    Arrays use [] as a generic placeholder so similar structures line up:
+    $.events[].rssi instead of $.events[0].rssi
+    """
+    if rows is None:
+        rows = []
 
-    Returns rows with:
-    - path
-    - match_type
-    - key
-    - value_preview
+    rows.append({
+        "path": path,
+        "type": type_name(value),
+        "example_value": value_preview(value)
+    })
+
+    if isinstance(value, dict):
+        for key, child_value in value.items():
+            child_path = f"{path}.{key}"
+            walk_json_structure(child_value, child_path, rows)
+
+    elif isinstance(value, list):
+        for item in value:
+            child_path = f"{path}[]"
+            walk_json_structure(item, child_path, rows)
+
+    return rows
+
+
+def build_common_structure(packages):
     """
+    Builds a dataframe showing:
+    - every shared/possible path
+    - how many JSON packages contain that path
+    - percentage coverage
+    - observed types
+    - example value
+    """
+    path_info = defaultdict(lambda: {
+        "package_indexes": set(),
+        "types": set(),
+        "examples": []
+    })
+
+    for package_index, package in enumerate(packages):
+        rows = walk_json_structure(package)
+
+        # Deduplicate paths within a single package so arrays do not overcount.
+        paths_seen_in_package = set()
+
+        for row in rows:
+            path = row["path"]
+
+            path_info[path]["types"].add(row["type"])
+
+            if len(path_info[path]["examples"]) < 3:
+                path_info[path]["examples"].append(row["example_value"])
+
+            if path not in paths_seen_in_package:
+                path_info[path]["package_indexes"].add(package_index)
+                paths_seen_in_package.add(path)
+
+    summary_rows = []
+
+    total_packages = len(packages)
+
+    for path, info in path_info.items():
+        package_count = len(info["package_indexes"])
+        coverage_percent = round((package_count / total_packages) * 100, 1)
+
+        summary_rows.append({
+            "path": path,
+            "packages_with_path": package_count,
+            "total_packages": total_packages,
+            "coverage_percent": coverage_percent,
+            "common_to_all": package_count == total_packages,
+            "observed_types": ", ".join(sorted(info["types"])),
+            "example_value": info["examples"][0] if info["examples"] else ""
+        })
+
+    df = pd.DataFrame(summary_rows)
+
+    return df.sort_values(
+        by=["common_to_all", "coverage_percent", "path"],
+        ascending=[False, False, True]
+    )
+
+
+def find_json_matches_in_packages(packages, search_term):
     matches = []
-
-    if not search_term:
-        return matches
-
     search_lower = search_term.lower()
 
-    if isinstance(data, dict):
-        for key, value in data.items():
-            key_text = str(key)
-            current_path = f"{path}.{key_text}"
+    for package_index, package in enumerate(packages):
+        rows = walk_json_structure(package)
 
-            key_matches = search_lower in key_text.lower()
-            path_matches = search_lower in current_path.lower()
+        for row in rows:
+            path = row["path"]
+            example_value = row["example_value"]
 
-            if key_matches or path_matches:
+            if (
+                search_lower in path.lower()
+                or search_lower in str(example_value).lower()
+            ):
                 matches.append({
-                    "path": current_path,
-                    "match_type": "key/path",
-                    "key": key_text,
-                    "value_preview": value_preview(value),
+                    "package_number": package_index + 1,
+                    "path": path,
+                    "type": row["type"],
+                    "example_value": example_value
                 })
 
-            matches.extend(find_json_matches(value, search_term, current_path))
-
-    elif isinstance(data, list):
-        for index, item in enumerate(data):
-            current_path = f"{path}[{index}]"
-
-            path_matches = search_lower in current_path.lower()
-
-            if path_matches:
-                matches.append({
-                    "path": current_path,
-                    "match_type": "path",
-                    "key": f"[{index}]",
-                    "value_preview": value_preview(item),
-                })
-
-            matches.extend(find_json_matches(item, search_term, current_path))
-
-    else:
-        value_text = str(data)
-        value_matches = search_lower in value_text.lower()
-
-        if value_matches:
-            matches.append({
-                "path": path,
-                "match_type": "value",
-                "key": "",
-                "value_preview": value_preview(data),
-            })
-
-    return matches
+    return pd.DataFrame(matches)
 
 
 raw_text = st.text_area(
-    "Paste cell contents here",
-    height=300,
-    placeholder='Example: {"device": {"rssi": -72, "status": "online"}}'
+    "Paste JSON package(s) here",
+    height=350,
+    placeholder="""Examples:
+
+{"device": {"rssi": -72, "status": "online"}}
+{"device": {"rssi": -68, "status": "offline"}}
+
+OR
+
+[
+  {"device": {"rssi": -72, "status": "online"}},
+  {"device": {"rssi": -68, "status": "offline"}}
+]
+"""
 )
 
-expanded = st.checkbox("Expand JSON structure by default", value=True)
+expanded = st.checkbox("Expand JSON packages by default", value=False)
 
 search_term = st.text_input(
-    "Search keys, paths, or values",
+    "Search paths or values",
     placeholder="Example: rssi"
 )
 
+only_common = st.checkbox("Show only paths common to all packages", value=False)
+
 if raw_text.strip():
     try:
-        parsed_json = json.loads(raw_text)
+        packages = parse_multiple_json_packages(raw_text)
 
-        st.success("Valid JSON")
+        st.success(f"Parsed {len(packages)} JSON package(s).")
 
-        total_nested_count = count_nested_items(parsed_json)
+        common_structure_df = build_common_structure(packages)
 
-        st.metric(
-            label="Total nested objects/arrays",
-            value=total_nested_count
-        )
+        if only_common:
+            display_structure_df = common_structure_df[
+                common_structure_df["common_to_all"] == True
+            ]
+        else:
+            display_structure_df = common_structure_df
+
+        st.subheader("Common structure")
+        st.dataframe(display_structure_df, use_container_width=True)
+
+        with st.expander("Copy common paths"):
+            common_paths = common_structure_df[
+                common_structure_df["common_to_all"] == True
+            ]["path"].tolist()
+
+            st.code("\n".join(common_paths), language="text")
 
         if search_term.strip():
             st.subheader(f"Search results for `{search_term}`")
 
-            matches = find_json_matches(parsed_json, search_term.strip())
-            matches_df = pd.DataFrame(matches)
+            search_df = find_json_matches_in_packages(
+                packages,
+                search_term.strip()
+            )
 
-            if matches_df.empty:
-                st.warning("No matching paths found.")
+            if search_df.empty:
+                st.warning("No matching paths or values found.")
             else:
-                st.write(f"Found `{len(matches_df)}` matching path(s).")
-                st.dataframe(matches_df, use_container_width=True)
+                st.write(f"Found {len(search_df)} match(es).")
+                st.dataframe(search_df, use_container_width=True)
 
                 with st.expander("Copy matching paths"):
-                    paths_text = "\n".join(matches_df["path"].tolist())
-                    st.code(paths_text, language="text")
+                    st.code(
+                        "\n".join(search_df["path"].drop_duplicates().tolist()),
+                        language="text"
+                    )
 
-        st.subheader("Summary by top-level element")
-        summary_df = build_element_summary(parsed_json)
-        st.dataframe(summary_df, use_container_width=True)
+        st.subheader("Pretty JSON packages")
 
-        st.subheader("Pretty JSON structure")
-        st.json(parsed_json, expanded=expanded)
+        for index, package in enumerate(packages, start=1):
+            with st.expander(f"Package {index}", expanded=expanded):
+                st.json(package, expanded=expanded)
 
         st.subheader("Pretty formatted JSON text")
-        st.code(
-            json.dumps(parsed_json, indent=2, ensure_ascii=False),
-            language="json"
-        )
+
+        for index, package in enumerate(packages, start=1):
+            with st.expander(f"Formatted package {index}", expanded=False):
+                st.code(
+                    json.dumps(package, indent=2, ensure_ascii=False),
+                    language="json"
+                )
+
+    except ValueError as e:
+        st.error("Could not parse multiple JSON packages.")
+        st.code(str(e), language="text")
 
     except json.JSONDecodeError as e:
         st.error(f"Invalid JSON: {e.msg}")
@@ -196,4 +299,4 @@ if raw_text.strip():
         st.write(f"Column: `{e.colno}`")
 
 else:
-    st.info("Paste JSON above to parse it.")
+    st.info("Paste one or more JSON packages above to parse them.")
