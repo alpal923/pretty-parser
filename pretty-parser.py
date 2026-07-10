@@ -1,115 +1,99 @@
-{
- "cells": [
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "id": "559c2779",
-   "metadata": {
-    "vscode": {
-     "languageId": "plaintext"
-    }
-   },
-   "outputs": [],
-   "source": [
-    "import json\n",
-    "import streamlit as st\n",
-    "import pandas as pd\n",
-    "\n",
-    "st.set_page_config(\n",
-    "    page_title=\"JSON Cell Parser\",\n",
-    "    page_icon=\"🧾\",\n",
-    "    layout=\"wide\"\n",
-    ")\n",
-    "\n",
-    "st.title(\"🧾 JSON Cell Parser\")\n",
-    "st.write(\"Paste JSON from a data table cell below.\")\n",
-    "\n",
-    "\n",
-    "def count_nested_items(value):\n",
-    "    \"\"\"\n",
-    "    Counts nested JSON containers:\n",
-    "    - dict objects\n",
-    "    - list arrays\n",
-    "    \"\"\"\n",
-    "    if isinstance(value, dict):\n",
-    "        return 1 + sum(count_nested_items(v) for v in value.values())\n",
-    "\n",
-    "    if isinstance(value, list):\n",
-    "        return 1 + sum(count_nested_items(item) for item in value)\n",
-    "\n",
-    "    return 0\n",
-    "\n",
-    "\n",
-    "def build_element_summary(data):\n",
-    "    rows = []\n",
-    "\n",
-    "    if isinstance(data, dict):\n",
-    "        for key, value in data.items():\n",
-    "            rows.append({\n",
-    "                \"element\": key,\n",
-    "                \"type\": type(value).__name__,\n",
-    "                \"nested_objects_or_arrays\": count_nested_items(value),\n",
-    "            })\n",
-    "\n",
-    "    elif isinstance(data, list):\n",
-    "        for index, value in enumerate(data):\n",
-    "            rows.append({\n",
-    "                \"element\": f\"[{index}]\",\n",
-    "                \"type\": type(value).__name__,\n",
-    "                \"nested_objects_or_arrays\": count_nested_items(value),\n",
-    "            })\n",
-    "\n",
-    "    else:\n",
-    "        rows.append({\n",
-    "            \"element\": \"root\",\n",
-    "            \"type\": type(data).__name__,\n",
-    "            \"nested_objects_or_arrays\": count_nested_items(data),\n",
-    "        })\n",
-    "\n",
-    "    return pd.DataFrame(rows)\n",
-    "\n",
-    "\n",
-    "raw_text = st.text_area(\n",
-    "    \"Paste cell contents here\",\n",
-    "    height=300,\n",
-    "    placeholder='Example: {\"name\": \"Toby\", \"age\": 5, \"traits\": [\"cute\", \"chaotic\"]}'\n",
-    ")\n",
-    "\n",
-    "expanded = st.checkbox(\"Expand JSON structure by default\", value=True)\n",
-    "\n",
-    "if raw_text.strip():\n",
-    "    try:\n",
-    "        parsed_json = json.loads(raw_text)\n",
-    "\n",
-    "        st.success(\"Valid JSON\")\n",
-    "\n",
-    "        st.subheader(\"Summary by top-level element\")\n",
-    "        summary_df = build_element_summary(parsed_json)\n",
-    "        st.dataframe(summary_df, use_container_width=True)\n",
-    "\n",
-    "        st.subheader(\"Pretty JSON structure\")\n",
-    "        st.json(parsed_json, expanded=expanded)\n",
-    "\n",
-    "        st.subheader(\"Pretty formatted JSON text\")\n",
-    "        st.code(\n",
-    "            json.dumps(parsed_json, indent=2, ensure_ascii=False),\n",
-    "            language=\"json\"\n",
-    "        )\n",
-    "\n",
-    "    except json.JSONDecodeError as e:\n",
-    "        st.error(f\"Invalid JSON: {e.msg}\")\n",
-    "        st.write(f\"Line: `{e.lineno}`\")\n",
-    "        st.write(f\"Column: `{e.colno}`\")\n",
-    "else:\n",
-    "    st.info(\"Paste JSON above to parse it.\")"
-   ]
-  }
- ],
- "metadata": {
-  "language_info": {
-   "name": "python"
-  }
- },
- "nbformat": 4,
- "nbformat_minor": 5
-}
+import json
+import streamlit as st
+import pandas as pd
+
+st.set_page_config(
+    page_title="JSON Cell Parser",
+    page_icon="🧾",
+    layout="wide"
+)
+
+st.title("🧾 JSON Cell Parser")
+st.write("Paste JSON from a data table cell below.")
+
+
+def count_nested_items(value):
+    """
+    Counts nested JSON containers:
+    - dict objects
+    - list arrays
+    """
+    if isinstance(value, dict):
+        return 1 + sum(count_nested_items(v) for v in value.values())
+
+    if isinstance(value, list):
+        return 1 + sum(count_nested_items(item) for item in value)
+
+    return 0
+
+
+def build_element_summary(data):
+    rows = []
+
+    if isinstance(data, dict):
+        for key, value in data.items():
+            rows.append({
+                "element": key,
+                "type": type(value).__name__,
+                "nested_objects_or_arrays": count_nested_items(value),
+            })
+
+    elif isinstance(data, list):
+        for index, value in enumerate(data):
+            rows.append({
+                "element": f"[{index}]",
+                "type": type(value).__name__,
+                "nested_objects_or_arrays": count_nested_items(value),
+            })
+
+    else:
+        rows.append({
+            "element": "root",
+            "type": type(data).__name__,
+            "nested_objects_or_arrays": count_nested_items(data),
+        })
+
+    return pd.DataFrame(rows)
+
+
+raw_text = st.text_area(
+    "Paste cell contents here",
+    height=300,
+    placeholder='Example: {"name": "Toby", "age": 5, "traits": ["cute", "chaotic"]}'
+)
+
+expanded = st.checkbox("Expand JSON structure by default", value=True)
+
+if raw_text.strip():
+    try:
+        parsed_json = json.loads(raw_text)
+
+        st.success("Valid JSON")
+
+        total_nested_count = count_nested_items(parsed_json)
+
+        st.metric(
+            label="Total nested objects/arrays",
+            value=total_nested_count
+        )
+
+        st.subheader("Summary by top-level element")
+        summary_df = build_element_summary(parsed_json)
+        st.dataframe(summary_df, use_container_width=True)
+
+        st.subheader("Pretty JSON structure")
+        st.json(parsed_json, expanded=expanded)
+
+        st.subheader("Pretty formatted JSON text")
+        st.code(
+            json.dumps(parsed_json, indent=2, ensure_ascii=False),
+            language="json"
+        )
+
+    except json.JSONDecodeError as e:
+        st.error(f"Invalid JSON: {e.msg}")
+        st.write(f"Line: `{e.lineno}`")
+        st.write(f"Column: `{e.colno}`")
+
+else:
+    st.info("Paste JSON above to parse it.")
