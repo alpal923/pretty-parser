@@ -235,25 +235,6 @@ if raw_text.strip():
 
         st.success(f"Parsed {len(packages)} JSON package(s).")
 
-        common_structure_df = build_common_structure(packages)
-
-        if only_common:
-            display_structure_df = common_structure_df[
-                common_structure_df["common_to_all"] == True
-            ]
-        else:
-            display_structure_df = common_structure_df
-
-        st.subheader("Common structure")
-        st.dataframe(display_structure_df, use_container_width=True)
-
-        with st.expander("Copy common paths"):
-            common_paths = common_structure_df[
-                common_structure_df["common_to_all"] == True
-            ]["path"].tolist()
-
-            st.code("\n".join(common_paths), language="text")
-
         if search_term.strip():
             st.subheader(f"Search results for `{search_term}`")
 
@@ -273,6 +254,25 @@ if raw_text.strip():
                         "\n".join(search_df["path"].drop_duplicates().tolist()),
                         language="text"
                     )
+
+        common_structure_df = build_common_structure(packages)
+
+        if only_common:
+            display_structure_df = common_structure_df[
+                common_structure_df["common_to_all"] == True
+            ]
+        else:
+            display_structure_df = common_structure_df
+
+        st.subheader("Common structure")
+        st.dataframe(display_structure_df, use_container_width=True)
+
+        with st.expander("Copy common paths"):
+            common_paths = common_structure_df[
+                common_structure_df["common_to_all"] == True
+            ]["path"].tolist()
+
+            st.code("\n".join(common_paths), language="text")
 
         st.subheader("Pretty JSON packages")
 
